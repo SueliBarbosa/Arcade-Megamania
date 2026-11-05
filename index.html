@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+  <title>Megamania</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+    body {
+      background-color: #000000;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: monospace;
+    }
+    #game-container {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas {
+      display: block;
+      background-color: #000000;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: -webkit-crisp-edges;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    #touch-controls {
+      position: absolute;
+      bottom: 12px;
+      left: 0;
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      padding: 0 16px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .touch-group {
+      display: flex;
+      gap: 12px;
+      pointer-events: auto;
+    }
+    .touch-btn {
+      width: 58px;
+      height: 58px;
+      background: rgba(0, 229, 255, 0.15);
+      border: 2px solid #00e5ff;
+      border-radius: 8px;
+      color: #ffffff;
+      font-size: 20px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: none;
+    }
+    .touch-btn:active {
+      background: rgba(0, 229, 255, 0.45);
+    }
+    .touch-btn.shoot {
+      width: 72px;
+      height: 58px;
+      border-color: #ff007f;
+      background: rgba(255, 0, 127, 0.2);
+      font-size: 14px;
+      letter-spacing: 1px;
+    }
+    .touch-btn.shoot:active {
+      background: rgba(255, 0, 127, 0.5);
+    }
+    @media (pointer: fine) and (min-width: 768px) {
+      #touch-controls {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="canvas" width="320" height="240"></canvas>
+    <div id="touch-controls">
+      <div class="touch-group">
+        <div class="touch-btn" id="btn-left">&lt;</div>
+        <div class="touch-btn" id="btn-right">&gt;</div>
+      </div>
+      <div class="touch-group">
+        <div class="touch-btn shoot" id="btn-shoot">TIRO</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    ctx.imageSmoothingEnabled = false;
+
+    function resizeDisplay() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      let scale = Math.floor(Math.min(w / 320, h / 240));
+      if (scale < 1) scale = 1;
+      canvas.style.width = (320 * scale) + 'px';
+      canvas.style.height = (240 * scale) + 'px';
+    }
+    window.addEventListener('resize', resizeDisplay);
+    resizeDisplay();
+
+    let audioCtx = null;
+    function initAudio() {
+      if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) audioCtx = new AudioContextClass();
+      }
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    function soundShoot() {
+      if (!audioCtx) return;
+      const t = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(860, t);
+      osc.frequency.exponentialRampToValueAtTime(110, t + 0.12);
+      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + 0.12);
+    }
+
+    function soundExplosion() {
+      if (!audioCtx) return;
+      const t = audioCtx.currentTime;
+      const dur = 0.22;
+      const bufferSize = Math.floor(audioCtx.sampleRate * dur);
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      const noise = audioCtx.createBufferSource();
+      noise.buffer = buffer;
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(750, t);
+      filter.frequency.exponentialRampToValueAtTime(60, t + dur);
+      const nGain = audioCtx.createGain();
+      nGain.gain.setValueAtTime(0.35, t);
+      nGain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      noise.connect(filter);
+      filter.connect(nGain);
+      nGain.connect(audioCtx.destination);
+
+      const osc = audioCtx.createOscillator();
+      const oGain = audioCtx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(160, t);
+      osc.frequency.exponentialRampToValueAtTime(30, t + dur);
+      oGain.gain.setValueAtTime(0.3, t);
+      oGain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(oGain);
+      oGain.connect(audioCtx.destination);
+
+      noise.start(t);
+      osc.start(t);
+      noise.stop(t + dur);
+      osc.stop(t + dur);
+    }
+
+    function soundPlayerDeath() {
+      if (!audioCtx) return;
+      const t = audioCtx.currentTime;
+      const dur = 0.5;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(220, t);
+      osc.frequency.linearRampToValueAtTime(40, t + dur);
+      gain.gain.setValueAtTime(0.4, t);
+      gain.gain.exponentialRampToValueAtTime(0.01, t + dur);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + dur);
+    }
+
+    function soundWaveClear() {
+      if (!audioCtx) return;
+      const notes = [261.63, 329.63, 392.0, 523.25];
+      notes.forEach((freq, idx) => {
+        const t = audioCtx.currentTime + idx * 0.08;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq, t);
+        gain.gain.setValueAtTime(0.18, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(t);
+        osc.stop(t + 0.14);
+      });
+    }
+
+    const FONT = {
+      '0': ["1111","1001","1001","1001","1111"],
+      '1': ["0110","0010","0010","0010","0111"],
+      '2': ["1111","0001","1111","1000","1111"],
+      '3': ["1111","0001","1111","0001","1111"],
+      '4': ["1001","1001","1111","0001","0001"],
+      '5': ["1111","1000","1111","0001","1111"],
+      '6': ["1111","1000","1111","1001","1111"],
+      '7': ["1111","0001","0010","0100","0100"],
+      '8': ["1111","1001","1111","1001","1111"],
+      '9': ["1111","1001","1111","0001","1111"],
+      'A': ["0110","1001","1111","1001","1001"],
+      'B': ["1110","1001","1110","1001","1110"],
+      'C': ["0111","1000","1000","1000","0111"],
+      'D': ["1110","1001","1001","1001","1110"],
+      'E': ["1111","1000","1110","1000","1111"],
+      'F': ["1111","1000","1110","1000","1000"],
+      'G': ["0111","1000","1011","1001","0111"],
+      'H': ["1001","1001","1111","1001","1001"],
+      'I': ["1110","0100","0100","0100","1110"],
+      'J': ["0011","0001","0001","1001","0110"],
+      'K': ["1001","1010","1100","1010","1001"],
+      'L': ["1000","1000","1000","1000","1111"],
+      'M': ["1001","1111","1001","1001","1001"],
+      'N': ["1001","1101","1011","1001","1001"],
+      'O': ["0110","1001","1001","1001","0110"],
+      'P': ["1110","1001","1110","1000","1000"],
+      'Q': ["0110","1001","1001","1010","0101"],
+      'R': ["1110","1001","1110","1010","1001"],
+      'S': ["0111","1000","0110","0001","1110"],
+      'T': ["1111","0100","0100","0100","0100"],
+      'U': ["1001","1001","1001","1001","0110"],
+      'V': ["1001","1001","1001","0110","0100"],
+      'W': ["1001","1001","1001","1111","1001"],
+      'X': ["1001","0110","0110","0110","1001"],
+      'Y': ["1001","1001","0110","0010","0010"],
+      'Z': ["1111","0001","0110","1000","1111"],
+      ' ': ["0000","0000","0000","0000","0000"],
+      '-': ["0000","0000","1111","0000","0000"],
+      ':': ["0000","0110","0000","0110","0000"],
+      '!': ["0100","0100","0100","0000","0100"],
+      '.': ["0000","0000","0000","0000","0110"]
+    };
+
+    function drawPixelText(str, x, y, color = '#ffffff', scale = 1) {
+      ctx.fillStyle = color;
+      const text = String(str).toUpperCase();
+      let cx = Math.floor(x);
+      const cy = Math.floor(y);
+      for (let i = 0; i < text.length; i++) {
+        const glyph = FONT[text[i]] || FONT[' '];
+        for (let r = 0; r < 5; r++) {
+          const row = glyph[r];
+          for (let c = 0; c < 4; c++) {
+            if (row[c] === '1') {
+              ctx.fillRect(cx + c * scale, cy + r * scale, scale, scale);
+            }
+          }
+        }
+        cx += 5 * scale;
+      }
+    }
+
+    function getTextWidth(str, scale = 1) {
+      return String(str).length * 5 * scale;
+    }
+
+    const PALETTE = {
+      '.': null,
+      'W': '#ffffff',
+      'C': '#00e5ff',
+      'M': '#ff007f',
+      'Y': '#ffee00',
+      'G': '#39ff14',
+      'R': '#ff2244',
+      'O': '#ff8800'
+    };
+
+    function createOffscreen(pattern) {
+      const h = pattern.length;
+      const w = pattern[0].length;
+      const off = document.createElement('canvas');
+      off.width = w;
+      off.height = h;
+      const octx = off.getContext('2d');
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const color = PALETTE[pattern[y][x]];
+          if (color) {
+            octx.fillStyle = color;
+            octx.fillRect(x, y, 1, 1);
+          }
+        }
+      }
+      return off;
+    }
+
+    const SPRITE_PATTERNS = {
+      player: [
+        ".......W.......",
+        "......WCW......",
+        ".....WCCCW.....",
+        "....WCGGGCW....",
+        "...WCWCCCWCW...",
+        "..WCCWCCCWCCW..",
+        ".WCCCCWCCWCCCCW.",
+        "WMMCCCCWCCCCMMW",
+        "WMMCCCCGCCCCMMW",
+        ".W...RR.RR...W.",
+        ".....RR.RR....."
+      ],
+      burger: [
+        ".....OOOOO.....",
+        "...OOWWOOOOO...",
+        "..OOOOOOWWOOO..",
+        ".OOOOOOOOOOOOO.",
+        "WWWWWWWWWWWWWWW",
+        "GG.GG.GG.GG.GG.",
+        "RRRRRRRRRRRRRRR",
+        "RRRRRRRRRRRRRRR",
+        ".OOOOOOOOOOOOO.",
+        "...CC.....CC...",
+        "...CC.....CC..."
+      ],
+      cookie: [
+        "...YYYYYYYYY...",
+        "..YYYYYYYYYYY..",
+        ".YY.YY.Y.YY.YY.",
+        "YYYY..YYY..YYYY",
+        "WWWWWWWWWWWWWWW",
+        "WWWWWWWWWWWWWWW",
+        "YYYY..YYY..YYYY",
+        ".YY.YY.Y.YY.YY.",
+        "..YYYYYYYYYYY..",
+        "...YYYYYYYYY...",
+        "....MM...MM...."
+      ],
+      iron: [
+        "....CCCCCCC....",
+        "....C.....C....",
+        "....C.....C....",
+        "..CCCCCCCCCCC..",
+        ".CCCCCCCCCCCCC.",
+        "MMMMMMMMMMMMMMM",
+        "MMMMMMMMMMMMMMM",
+        "WWWWWWWWWWWWWWW",
+        "WWWWWWWWWWWWWWW",
+        "...YY..YY..YY..",
+        "....Y...Y...Y.."
+      ],
+      bowtie: [
+        "CCC.........CCC",
+        "CMMMC.....CMMMC",
+        "CMMMMMC.CMMMMMC",
+        "CMMMYYYCYYYMMMC",
+        "...MYYWWYYM...",
+        "...MYYWWYYM...",
+        "CMMMYYYCYYYMMMC",
+        "CMMMMMC.CMMMMMC",
+        "CMMMC.....CMMMC",
+        "CCC.........CCC",
+        ".....GG.GG....."
+      ],
+      diamond: [
+        ".....CCCCCC....",
+        "...CCCCCCCCCC..",
+        "..CCWWCCCCWWCC.",
+        ".CCCCCCCCCCCCCC",
+        ".CCMMCCCCCCMMCC",
+        "..CCCCCCCCCCCC.",
+        "...CCCCCCCCCC..",
+        "....CCCCCCCC...",
+        ".....CCCCCC....",
+        "......CCCC.....",
+        ".......CC......"
+      ]
+    };
+
+    const SPRITES = {
+      player: createOffscreen(SPRITE_PATTERNS.player),
+      burger: createOffscreen(SPRITE_PATTERNS.burger),
+      cookie: createOffscreen(SPRITE_PATTERNS.cookie),
+      iron: createOffscreen(SPRITE_PATTERNS.iron),
+      bowtie: createOffscreen(SPRITE_PATTERNS.bowtie),
+      diamond: createOffscreen(SPRITE_PATTERNS.diamond)
+    };
+
+    const ENEMY_CYCLE = ['burger', 'cookie', 'iron', 'bowtie', 'diamond'];
+
+    const keys = { left: false, right: false, shoot: false };
+
+    window.addEventListener('keydown', (e) => {
+      initAudio();
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
+      if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+      if (e.code === 'Space') {
+        keys.shoot = true;
+        handleStartOrRestart();
+      }
+      if (e.code === 'Enter') {
+        handleStartOrRestart();
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
+      if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+      if (e.code === 'Space') keys.shoot = false;
+    });
+
+    function bindTouch(id, onDown, onUp) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        initAudio();
+        onDown();
+      }, { passive: false });
+      el.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        onUp();
+      }, { passive: false });
+      el.addEventListener('touchcancel', (e) => {
+        e.preventDefault();
+        onUp();
+      }, { passive: false });
+    }
+
+    bindTouch('btn-left', () => { keys.left = true; }, () => { keys.left = false; });
+    bindTouch('btn-right', () => { keys.right = true; }, () => { keys.right = false; });
+    bindTouch('btn-shoot', () => {
+      keys.shoot = true;
+      handleStartOrRestart();
+    }, () => { keys.shoot = false; });
+
+    let isTouching = false;
+    let touchStartX = 0;
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      initAudio();
+      handleStartOrRestart();
+      if (e.touches.length > 0) {
+        isTouching = true;
+        touchStartX = e.touches[0].clientX;
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (isTouching && e.touches.length > 0) {
+        const currentX = e.touches[0].clientX;
+        const diff = currentX - touchStartX;
+        if (diff < -8) { keys.left = true; keys.right = false; }
+        else if (diff > 8) { keys.right = true; keys.left = false; }
+        else { keys.left = false; keys.right = false; }
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      isTouching = false;
+      keys.left = false;
+      keys.right = false;
+    }, { passive: false });
+
+    const stars = [];
+    for (let i = 0; i < 35; i++) {
+      stars.push({
+        x: Math.random() * 320,
+        y: Math.random() * 240,
+        speed: 8 + Math.random() * 24,
+        color: Math.random() > 0.5 ? '#ffffff' : '#00e5ff'
+      });
+    }
+
+    let gameState = 'START';
+    let score = 0;
+    let highScore = parseInt(localStorage.getItem('megamania_high') || '0', 10);
+    let lives = 3;
+    let stage = 1;
+    let energy = 100;
+    let messageTimer = 0;
+    let currentMessage = '';
+
+    const player = {
+      x: 152,
+      y: 208,
+      w: 15,
+      h: 11,
+      speed: 150,
+      invulnTimer: 0,
+      shootCooldown: 0
+    };
+
+    let playerBullets = [];
+    let enemyBullet = null;
+    let enemies = [];
+    let particles = [];
+    let enemyShootTimer = 0;
+
+    function handleStartOrRestart() {
+      if (gameState === 'START' || gameState === 'GAMEOVER') {
+        startGame();
+      }
+    }
+
+    function startGame() {
+      score = 0;
+      lives = 3;
+      stage = 1;
+      energy = 100;
+      initWave(stage);
+      gameState = 'PLAYING';
+      showMessage('FASE 1', 1.5);
+    }
+
+    function showMessage(msg, dur) {
+      currentMessage = msg;
+      messageTimer = dur;
+    }
+
+    function initWave(stageNum) {
+      enemies = [];
+      playerBullets = [];
+      enemyBullet = null;
+      energy = 100;
+      player.x = 152;
+      player.invulnTimer = 1.0;
+
+      const typeKey = ENEMY_CYCLE[(stageNum - 1) % ENEMY_CYCLE.length];
+      const baseSpeed = 38 + (stageNum - 1) * 6;
+
+      const rows = 2;
+      const cols = 7;
+      const spacingX = 26;
+
+      for (let r = 0; r < rows; r++) {
+        const dir = (r % 2 === 0) ? 1 : -1;
+        const rowSpeed = baseSpeed * dir;
+        const startY = 36 + r * 18;
+
+        for (let c = 0; c < cols; c++) {
+          enemies.push({
+            x: 24 + c * spacingX,
+            y: startY,
+            w: 15,
+            h: 11,
+            row: r,
+            vx: rowSpeed,
+            type: typeKey,
+            animTimer: Math.random() * 5
+          });
+        }
+      }
+    }
+
+    function addExplosion(x, y, count = 10) {
+      const colors = ['#ffffff', '#00e5ff', '#ff007f', '#ffee00', '#ff2244'];
+      for (let i = 0; i < count; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const spd = 25 + Math.random() * 70;
+        particles.push({
+          x: x,
+          y: y,
+          vx: Math.cos(ang) * spd,
+          vy: Math.sin(ang) * spd,
+          color: colors[Math.floor(Math.random() * colors.length)],
+          life: 0.35,
+          maxLife: 0.35
+        });
+      }
+    }
+
+    function playerDie(byEnergy = false) {
+      soundPlayerDeath();
+      addExplosion(player.x + 7, player.y + 5, 20);
+      lives--;
+      if (lives <= 0) {
+        if (score > highScore) {
+          highScore = score;
+          localStorage.setItem('megamania_high', highScore.toString());
+        }
+        gameState = 'GAMEOVER';
+      } else {
+        initWave(stage);
+        showMessage(byEnergy ? 'SEM ENERGIA!' : 'NAVE DESTRUIDA!', 1.4);
+      }
+    }
+
+    function checkAABB(a, b) {
+      return (
+        a.x < b.x + b.w &&
+        a.x + a.w > b.x &&
+        a.y < b.y + b.h &&
+        a.y + a.h > b.y
+      );
+    }
+
+    let lastTime = performance.now();
+
+    function gameLoop(now) {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+
+      update(dt);
+      render();
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    function update(dt) {
+      for (let i = 0; i < stars.length; i++) {
+        stars[i].y += stars[i].speed * dt;
+        if (stars[i].y > 240) {
+          stars[i].y = 0;
+          stars[i].x = Math.random() * 320;
+        }
+      }
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= dt;
+        if (p.life <= 0) {
+          particles.splice(i, 1);
+        }
+      }
+
+      if (messageTimer > 0) {
+        messageTimer -= dt;
+      }
+
+      if (gameState !== 'PLAYING') return;
+
+      energy -= (100 / 30) * dt;
+      if (energy <= 0) {
+        energy = 0;
+        playerDie(true);
+        return;
+      }
+
+      if (keys.left) {
+        player.x -= player.speed * dt;
+      }
+      if (keys.right) {
+        player.x += player.speed * dt;
+      }
+      if (player.x < 4) player.x = 4;
+      if (player.x > 320 - player.w - 4) player.x = 320 - player.w - 4;
+
+      if (player.shootCooldown > 0) player.shootCooldown -= dt;
+      if (player.invulnTimer > 0) player.invulnTimer -= dt;
+
+      if (keys.shoot && player.shootCooldown <= 0 && playerBullets.length < 2) {
+        playerBullets.push({
+          x: player.x + 7,
+          y: player.y - 2,
+          w: 2,
+          h: 6,
+          vy: -320
+        });
+        soundShoot();
+        player.shootCooldown = 0.16;
+      }
+
+      for (let i = playerBullets.length - 1; i >= 0; i--) {
+        const b = playerBullets[i];
+        b.y += b.vy * dt;
+        if (b.y < 18) {
+          playerBullets.splice(i, 1);
+        }
+      }
+
+      enemyShootTimer -= dt;
+      if (enemyShootTimer <= 0 && !enemyBullet && enemies.length > 0) {
+        const shooter = enemies[Math.floor(Math.random() * enemies.length)];
+        enemyBullet = {
+          x: shooter.x + 7,
+          y: shooter.y + shooter.h,
+          w: 2,
+          h: 5,
+          vy: 110 + stage * 7
+        };
+        enemyShootTimer = 0.8 + Math.random() * 0.8;
+      }
+
+      if (enemyBullet) {
+        enemyBullet.y += enemyBullet.vy * dt;
+        if (enemyBullet.y > 224) {
+          enemyBullet = null;
+        } else if (player.invulnTimer <= 0 && checkAABB(enemyBullet, player)) {
+          enemyBullet = null;
+          playerDie(false);
+          return;
+        }
+      }
+
+      const rowsPresent = {};
+      enemies.forEach((e) => {
+        if (!rowsPresent[e.row]) rowsPresent[e.row] = [];
+        rowsPresent[e.row].push(e);
+      });
+
+      for (const r in rowsPresent) {
+        const rowEnemies = rowsPresent[r];
+        let reverse = false;
+        let drop = false;
+
+        for (let i = 0; i < rowEnemies.length; i++) {
+          const e = rowEnemies[i];
+          e.x += e.vx * dt;
+          e.animTimer += dt;
+
+          if (e.vx > 0 && e.x + e.w >= 312) {
+            reverse = true;
+            drop = true;
+          } else if (e.vx < 0 && e.x <= 8) {
+            reverse = true;
+            drop = true;
+          }
+
+          if (e.y > 212) {
+            e.y = 26;
+          }
+        }
+
+        if (reverse) {
+          for (let i = 0; i < rowEnemies.length; i++) {
+            rowEnemies[i].vx = -rowEnemies[i].vx;
+            if (drop) {
+              rowEnemies[i].y += 7;
+            }
+          }
+        }
+      }
+
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        if (player.invulnTimer <= 0 && checkAABB(e, player)) {
+          playerDie(false);
+          return;
+        }
+
+        for (let j = playerBullets.length - 1; j >= 0; j--) {
+          const b = playerBullets[j];
+          if (checkAABB(b, e)) {
+            addExplosion(e.x + e.w / 2, e.y + e.h / 2, 12);
+            soundExplosion();
+            enemies.splice(i, 1);
+            playerBullets.splice(j, 1);
+            score += 20 + stage * 5;
+            break;
+          }
+        }
+      }
+
+      if (enemies.length === 0) {
+        soundWaveClear();
+        const bonus = Math.floor(energy) * 10;
+        score += bonus;
+        stage++;
+        initWave(stage);
+        showMessage('FASE CONCLUIDA! +' + bonus, 1.8);
+      }
+    }
+
+    function render() {
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, 320, 240);
+
+      for (let i = 0; i < stars.length; i++) {
+        ctx.fillStyle = stars[i].color;
+        ctx.fillRect(Math.floor(stars[i].x), Math.floor(stars[i].y), 1, 1);
+      }
+
+      drawPixelText('SCORE:' + pad(score, 6), 6, 6, '#ffffff', 1);
+      drawPixelText('REC:' + pad(highScore, 6), 110, 6, '#ffee00', 1);
+
+      drawPixelText('VIDAS:', 220, 6, '#ffffff', 1);
+      for (let i = 0; i < lives; i++) {
+        ctx.drawImage(SPRITES.player, 260 + i * 18, 4);
+      }
+
+      ctx.fillStyle = '#222222';
+      ctx.fillRect(0, 18, 320, 1);
+
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        ctx.fillStyle = p.color;
+        ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 2, 2);
+      }
+
+      if (gameState === 'PLAYING') {
+        for (let i = 0; i < enemies.length; i++) {
+          const e = enemies[i];
+          const sprite = SPRITES[e.type];
+          const wobble = Math.sin(e.animTimer * 5) * 1.5;
+          ctx.drawImage(sprite, Math.floor(e.x), Math.floor(e.y + wobble));
+        }
+
+        ctx.fillStyle = '#ffee00';
+        for (let i = 0; i < playerBullets.length; i++) {
+          const b = playerBullets[i];
+          ctx.fillRect(Math.floor(b.x), Math.floor(b.y), b.w, b.h);
+        }
+
+        if (enemyBullet) {
+          ctx.fillStyle = '#ff007f';
+          ctx.fillRect(Math.floor(enemyBullet.x), Math.floor(enemyBullet.y), enemyBullet.w, enemyBullet.h);
+        }
+
+        if (player.invulnTimer <= 0 || Math.floor(performance.now() / 80) % 2 === 0) {
+          ctx.drawImage(SPRITES.player, Math.floor(player.x), Math.floor(player.y));
+        }
+      }
+
+      ctx.fillStyle = '#222222';
+      ctx.fillRect(0, 224, 320, 1);
+
+      drawPixelText('ENERGIA', 6, 229, '#ffffff', 1);
+
+      const barX = 58;
+      const barY = 228;
+      const barW = 200;
+      const barH = 6;
+
+      ctx.fillStyle = '#111111';
+      ctx.fillRect(barX, barY, barW, barH);
+      ctx.strokeStyle = '#555555';
+      ctx.strokeRect(barX - 0.5, barY - 0.5, barW + 1, barH + 1);
+
+      const currentW = Math.max(0, Math.floor((energy / 100) * barW));
+      let barColor = '#39ff14';
+      if (energy <= 20) {
+        barColor = (Math.floor(performance.now() / 150) % 2 === 0) ? '#ff2244' : '#ffffff';
+      } else if (energy <= 50) {
+        barColor = '#ffee00';
+      }
+
+      ctx.fillStyle = barColor;
+      ctx.fillRect(barX, barY, currentW, barH);
+
+      drawPixelText('F' + stage, 268, 229, '#00e5ff', 1);
+
+      if (messageTimer > 0 && gameState === 'PLAYING') {
+        const mw = getTextWidth(currentMessage, 1);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(160 - mw / 2 - 4, 110, mw + 8, 12);
+        drawPixelText(currentMessage, 160 - mw / 2, 114, '#ffee00', 1);
+      }
+
+      if (gameState === 'START') {
+        const title = 'MEGAMANIA';
+        const tw = getTextWidth(title, 3);
+        drawPixelText(title, 160 - tw / 2, 70, '#00e5ff', 3);
+
+        const sub = 'ATARI 2600 REMAKE';
+        const sw = getTextWidth(sub, 1);
+        drawPixelText(sub, 160 - sw / 2, 102, '#ff007f', 1);
+
+        const prompt = 'ESPACO OU TOQUE PARA JOGAR';
+        const pw = getTextWidth(prompt, 1);
+        const blink = Math.floor(performance.now() / 400) % 2 === 0;
+        if (blink) {
+          drawPixelText(prompt, 160 - pw / 2, 140, '#ffffff', 1);
+        }
+
+        const info = 'SETA/AD MOVE  ESPACO ATIRA';
+        const iw = getTextWidth(info, 1);
+        drawPixelText(info, 160 - iw / 2, 170, '#39ff14', 1);
+      } else if (gameState === 'GAMEOVER') {
+        const go = 'GAME OVER';
+        const gw = getTextWidth(go, 3);
+        drawPixelText(go, 160 - gw / 2, 75, '#ff2244', 3);
+
+        const fin = 'PONTUACAO: ' + score;
+        const fw = getTextWidth(fin, 1);
+        drawPixelText(fin, 160 - fw / 2, 115, '#ffffff', 1);
+
+        const restart = 'ENTER OU ESPACO PARA REINICIAR';
+        const rw = getTextWidth(restart, 1);
+        const blink = Math.floor(performance.now() / 400) % 2 === 0;
+        if (blink) {
+          drawPixelText(restart, 160 - rw / 2, 148, '#ffee00', 1);
+        }
+      }
+    }
+
+    function pad(num, size) {
+      let s = String(num);
+      while (s.length < size) s = '0' + s;
+      return s;
+    }
+
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
